@@ -2,20 +2,17 @@ name: Build lede for Redmi AX6000
 
 on:
   workflow_dispatch:
-    inputs:
-      mihomo_version:
-        description: "mihomo (clash_meta) core version tag"
-        required: false
-        default: "v1.19.33"
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
   REPO_BRANCH: master
   CONFIG_FILE: configs/ax6000.seed
   TZ: Asia/Shanghai
+  MIHOMO_VERSION: v1.19.34
+  MIHOMO_SHA256: daaf78a6240a282cdfd75bcbf98fe321f6bd52765cc29e79f344191198f0b50f
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: build-${{ github.ref }}
@@ -23,134 +20,212 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 350
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Free disk space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          set -euo pipefail
+          sudo rm -rf \
+            /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost /usr/share/miniconda /usr/lib/jvm \
+            /usr/local/lib/node_modules /opt/microsoft /usr/local/aws-cli \
+            /usr/local/share/powershell /usr/share/az_* 2>/dev/null || true
           sudo docker image prune -af >/dev/null 2>&1 || true
+          sudo apt-get clean
           df -h /
+          avail=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+          if [ "${avail:-0}" -lt 25 ]; then
+            echo "Only ${avail}G free on /; need at least 25G" >&2
+            exit 1
+          fi
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update -qq
-          # Core set: must succeed.
-          sudo apt-get install -qq -y \
-            build-essential clang flex bison gawk gettext git \
-            libncurses-dev libssl-dev libelf-dev zlib1g-dev \
-            python3 python3-setuptools python3-pip python3-ply \
-            rsync swig unzip file wget curl ccache subversion
-          # Common extras from the lede README: nice-to-have, not fatal.
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          sudo apt-get update
           sudo apt-get install -y \
-            antlr3 asciidoc autoconf automake autopoint busybox cmake cpio \
-            device-tree-compiler ecj fastjar gcc-multilib g++-multilib gperf \
-            haveged help2man intltool lib32gcc-s1 libc6-dev-i386 \
-            libglib2.0-dev libmpc-dev libmpfr-dev libpython3-dev \
-            libreadline-dev libtool libyaml-dev lld llvm mkisofs msmtp nano \
-            ninja-build p7zip-full patch pkgconf python3-docutils \
-            python3-pyelftools qemu-utils re2c scons squashfs-tools texinfo \
-            uglifyjs upx-ucl vim xmlto xxd zstd || true
+            build-essential clang flex bison gawk gettext intltool \
+            autoconf automake libtool cmake ninja-build pkgconf \
+            libncurses-dev libssl-dev libelf-dev zlib1g-dev \
+            liblzma-dev libbz2-dev libzstd-dev libyaml-dev libreadline-dev \
+            libgmp-dev libffi-dev libpcre2-dev libglib2.0-dev \
+            libmpc-dev libmpfr-dev libpython3-dev \
+            python3 python3-setuptools python3-pip python3-wheel python3-ply \
+            device-tree-compiler bc cpio patch rsync swig squashfs-tools \
+            xz-utils zstd bzip2 unzip file wget curl git subversion ccache \
+            jq xxd texinfo gperf re2c
 
       - name: Clone lede
         run: |
-          git clone --depth 1 "$REPO_URL" -b "$REPO_BRANCH" openwrt
+          set -euo pipefail
+          ok=0
+          for i in 1 2 3; do
+            if git clone --depth 1 "$REPO_URL" -b "$REPO_BRANCH" openwrt; then
+              ok=1
+              break
+            fi
+            rm -rf openwrt
+            sleep 15
+          done
+          [ "$ok" -eq 1 ] || { echo "lede clone failed" >&2; exit 1; }
           git -C openwrt log -1 --format='- lede @ %h (%cd)' --date=short >> "$GITHUB_STEP_SUMMARY"
           df -h .
 
-      - name: Cache dl/
+      - name: Install repository overlay
+        run: |
+          set -euo pipefail
+          mkdir -p openwrt/files
+          cp -a files/. openwrt/files/
+          cp configs/feeds.conf openwrt/feeds.conf
+          find openwrt/files -type f -print
+
+      - name: Cache download cache
         uses: actions/cache@v4
         with:
           path: openwrt/dl
-          key: dl-${{ github.sha }}
-          restore-keys: dl-
-
-      - name: Run diy-part1.sh (before feeds)
-        run: |
-          chmod +x diy-part1.sh
-          cd openwrt && ../diy-part1.sh
+          key: dl-${{ hashFiles('configs/ax6000.seed') }}-${{ github.run_id }}
+          restore-keys: |
+            dl-
 
       - name: Update and install feeds
         working-directory: openwrt
         run: |
-          ./scripts/feeds update -a
+          set -euo pipefail
+          ok=0
+          for i in 1 2 3; do
+            if ./scripts/feeds update -a; then
+              ok=1
+              break
+            fi
+            sleep 15
+          done
+          [ "$ok" -eq 1 ] || { echo "feeds update failed" >&2; exit 1; }
           ./scripts/feeds install -a
 
-      - name: Run diy-part2.sh (after feeds)
-        run: |
-          chmod +x diy-part2.sh
-          cd openwrt && ../diy-part2.sh
-
-      - name: Bake mihomo (clash_meta) core into files/
+      - name: Bake mihomo (clash_meta) core
         working-directory: openwrt
-        env:
-          MIHOMO_VERSION: ${{ github.event.inputs.mihomo_version }}
         run: |
+          set -euo pipefail
           mkdir -p files/etc/openclash/core
-          curl -fsSL \
-            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-arm64-${MIHOMO_VERSION}.gz" \
-            | gunzip > files/etc/openclash/core/clash_meta
-          chmod +x files/etc/openclash/core/clash_meta
-          file files/etc/openclash/core/clash_meta
+          curl --retry 5 --retry-delay 5 -fsSL \
+            -o /tmp/mihomo.gz \
+            "https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VERSION}/mihomo-linux-arm64-${MIHOMO_VERSION}.gz"
+          echo "${MIHOMO_SHA256}  /tmp/mihomo.gz" | sha256sum -c -
+          gzip -t /tmp/mihomo.gz
+          gunzip -c /tmp/mihomo.gz > files/etc/openclash/core/clash_meta
+          chmod 755 files/etc/openclash/core/clash_meta
+          file files/etc/openclash/core/clash_meta | tee /tmp/mihomo.file
+          grep -q 'ELF 64-bit LSB executable, ARM aarch64' /tmp/mihomo.file
           ls -lh files/etc/openclash/core/clash_meta
-          echo "- mihomo ${MIHOMO_VERSION} baked at /etc/openclash/core/clash_meta" >> "$GITHUB_STEP_SUMMARY"
+          echo "- mihomo ${MIHOMO_VERSION} baked uncompressed at /etc/openclash/core/clash_meta" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Load config
+      - name: Load and verify config
         working-directory: openwrt
         run: |
+          set -euo pipefail
           cp "../${CONFIG_FILE}" .config
           make defconfig
           ./scripts/diffconfig.sh | tee diffconfig.txt
+          ../scripts/verify-config.sh .config
           echo "::group::key config lines"
-          grep -E 'CONFIG_TARGET_mediatek_filogic_DEVICE|dnsmasq|ssr-plus_INCLUDE|openclash|wpad|xray|htpdate|zram' .config || true
+          grep -E 'CONFIG_TARGET_mediatek_filogic_DEVICE|dnsmasq|ssr-plus|openclash|wpad|xray|htpdate|zram|package-manager' .config || true
           echo "::endgroup::"
+
+      - name: Record source versions
+        run: |
+          set -euo pipefail
+          {
+            echo "generated_at=$(date -u +%FT%TZ)"
+            echo "lede=$(git -C openwrt rev-parse HEAD)"
+            for d in openwrt/feeds/*; do
+              if [ -d "$d/.git" ]; then
+                echo "feed.$(basename "$d")=$(git -C "$d" rev-parse HEAD)"
+              fi
+            done
+            echo "mihomo_version=${MIHOMO_VERSION}"
+            echo "mihomo_sha256=${MIHOMO_SHA256}"
+            echo "config_sha256=$(sha256sum "${CONFIG_FILE}" | awk '{print $1}')"
+            echo "resolved_config_sha256=$(sha256sum openwrt/.config | awk '{print $1}')"
+          } | tee openwrt/sources.lock
 
       - name: Download sources
         working-directory: openwrt
-        run: make download -j"$(nproc)"
+        run: |
+          set -euo pipefail
+          ok=0
+          for i in 1 2 3; do
+            if make download -j"$(nproc)"; then
+              ok=1
+              break
+            fi
+            sleep 15
+          done
+          [ "$ok" -eq 1 ] || { echo "make download failed" >&2; exit 1; }
 
       - name: Compile
         working-directory: openwrt
         run: |
-          make -j"$(nproc)" || make -j1 V=s
+          set -o pipefail
+          make -j"$(nproc)" V=s 2>&1 | tee build.log
           echo "::group::built images"
           ls -lh bin/targets/mediatek/filogic/ || true
           echo "::endgroup::"
 
-      - name: Sanity-check image contents
+      - name: Verify image and manifest
         working-directory: openwrt
         run: |
-          MANIFEST=$(ls bin/targets/mediatek/filogic/*.manifest 2>/dev/null | head -n1 || true)
-          if [ -n "$MANIFEST" ]; then
-            echo "::group::proxy packages in $MANIFEST"
-            grep -E '^(xray-core|luci-app-openclash|luci-app-ssr-plus|dnsmasq-full|ruby|ppp) -' "$MANIFEST" || true
-            echo "::endgroup::"
-          else
-            echo "No manifest file found; check the image listing above manually."
-          fi
-          cp diffconfig.txt bin/targets/mediatek/filogic/ || true
+          set -euo pipefail
+          ../scripts/verify-manifest.sh bin/targets/mediatek/filogic
+          cp diffconfig.txt bin/targets/mediatek/filogic/
+          ls -lh bin/targets/mediatek/filogic/*sysupgrade* bin/targets/mediatek/filogic/SHA256SUMS
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: ax6000-firmware-${{ github.run_number }}
-          path: openwrt/bin/targets/mediatek/filogic/*
+          path: |
+            openwrt/bin/targets/mediatek/filogic/
+            openwrt/build.log
+            openwrt/sources.lock
+            openwrt/diffconfig.txt
           compression-level: 0
           if-no-files-found: error
           retention-days: 30
 
+      - name: Publish firmware release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="fw-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$tag" \
+            --target "$GITHUB_SHA" \
+            --title "AX6000 firmware ${GITHUB_RUN_NUMBER}" \
+            --notes "lede $(git -C openwrt rev-parse --short HEAD); mihomo ${MIHOMO_VERSION}; kernel follows lede master." \
+            openwrt/bin/targets/mediatek/filogic/*sysupgrade*.bin \
+            openwrt/bin/targets/mediatek/filogic/*.manifest \
+            openwrt/bin/targets/mediatek/filogic/SHA256SUMS \
+            openwrt/sources.lock \
+            openwrt/diffconfig.txt \
+            openwrt/build.log
+
       - name: Upload logs on failure
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
           name: ax6000-build-logs-${{ github.run_number }}
           path: |
-            openwrt/logs/
+            openwrt/build.log
+            openwrt/sources.lock
             openwrt/.config
             openwrt/diffconfig.txt
+            openwrt/logs/
           if-no-files-found: ignore
           retention-days: 14

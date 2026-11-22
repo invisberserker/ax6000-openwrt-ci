@@ -1,0 +1,16 @@
+#!/bin/sh
+# First-boot defaults: neither proxy starts until selected in LuCI.
+# ssr-plus has no UCI enable guard (its boot() always calls start()), so the
+# rc.d symlink is the reliable switch for it.
+
+[ -f /etc/config/proxy_switch ] || touch /etc/config/proxy_switch
+
+uci -q set proxy_switch.main.mode='off'
+uci -q set openclash.config.enable='0'
+uci -q commit proxy_switch
+uci -q commit openclash
+
+/etc/init.d/openclash disable 2>/dev/null
+/etc/init.d/shadowsocksr disable 2>/dev/null
+
+exit 0

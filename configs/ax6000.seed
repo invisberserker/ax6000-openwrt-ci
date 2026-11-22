@@ -1,67 +1,88 @@
 # Seed config for Xiaomi Redmi Router AX6000 on coolsnowwolf/lede master.
-# Applied with `make defconfig`; the exact surviving symbols are printed in
-# the workflow log (diffconfig.txt lands in the artifact).
+# Applied with `make defconfig`; the workflow verifies the resulting .config
+# and image manifest so a renamed/dropped symbol fails the build instead of
+# silently producing the wrong image.
+#
+# This image runs OpenClash + mihomo as the primary proxy and keeps
+# luci-app-ssr-plus + Xray as a manually selected VLESS-REALITY backup.
+# Exactly one proxy is enabled at a time through Services -> Proxy Switch.
 
 # --- Target ------------------------------------------------------------------
-# Custom-U-Boot (big single-UBI ~110 MB) layout -- matches the bl-mt798x-style
-# bootloader and the mpdn/lede images you have been flashing.
+# Custom-U-Boot / immortalwrt-mt798x layout: one big ~110 MB UBI.
+# (The -stock profile is the U-Boot "default" layout, ubi_kernel 30M + ubi 80M.)
 CONFIG_TARGET_mediatek=y
 CONFIG_TARGET_mediatek_filogic=y
 CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_redmi-router-ax6000=y
-# If the Step-0 pre-flight check shows stock-sized partitions instead
-# (ubi 30M / ubi1 / overlay ~50M), comment the line above and use this one:
-# CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_redmi-router-ax6000-stock=y
+# CONFIG_TARGET_mediatek_filogic_DEVICE_xiaomi_redmi-router-ax6000-stock is not set
 
 # --- LuCI base ----------------------------------------------------------------
 CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_luci-app-firewall=y
-CONFIG_PACKAGE_luci-app-opkg=y
+CONFIG_PACKAGE_luci-app-package-manager=y
 CONFIG_PACKAGE_luci-theme-bootstrap=y
 CONFIG_PACKAGE_luci-theme-argon=y
+CONFIG_PACKAGE_luci-proto-ppp=y
+CONFIG_PACKAGE_luci-proto-ipv6=y
 CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
-CONFIG_PACKAGE_luci-i18n-opkg-zh-cn=y
+CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn=y
+# Old package-manager names; no longer exist in luci openwrt-25.12.
+# CONFIG_PACKAGE_luci-app-opkg is not set
+# CONFIG_PACKAGE_luci-i18n-opkg-zh-cn is not set
+# CONFIG_PACKAGE_luci-theme-design is not set
 
 # --- Proxy plugins -------------------------------------------------------------
-# ssr-plus (helloworld) with the Xray core ONLY -- every optional engine/
-# helper (SS/SSR, trojan-only helpers, kcptun, naive, hysteria, tuic, mihomo,
-# obfs plugins, ChinaDNS-NG/MosDNS, geodata) is deliberately off; OpenClash
-# handles the rest.
+# ssr-plus (helloworld dev, PKG_VERSION 198) with Xray only. VLESS/XTLS/
+# REALITY are features of the single xray-core binary, not separate packages.
+# Every other proxy engine/helper is explicitly off. dns2tcp/microsocks/
+# ipt2socks are hard UI dependencies, not selectable engines.
 CONFIG_PACKAGE_luci-app-ssr-plus=y
+CONFIG_PACKAGE_xray-core=y
 CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray=y
-# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Mihomo is not set
-# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_V2ray is not set
-# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Http_Proxy is not set
-# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Client is not set
-# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Libev_Server is not set
+CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_NONE_Client=y
+CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_NONE_Server=y
+CONFIG_PACKAGE_luci-app-ssr-plus_Nftables_Transparent_Proxy=y
+
+# Choice defaults and dev-branch booleans: force all of them off.
+# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Rust_Client is not set
+# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Rust_Server is not set
 # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Client is not set
 # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ShadowsocksR_Libev_Server is not set
 # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_Simple_Obfs is not set
 # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_V2ray_Plugin is not set
+# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_NONE_V2RAY is not set
+# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Http_Proxy is not set
+# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Mihomo is not set
+# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_GeoData is not set
 # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Kcptun is not set
 # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_NaiveProxy is not set
-# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Hysteria is not set
-# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_TUIC is not set
+# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadow_TLS is not set
 # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_ChinaDNS_NG is not set
 # CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_MosDNS is not set
-# CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_GeoData is not set
+# CONFIG_PACKAGE_luci-app-ssr-plus_Iptables_Transparent_Proxy is not set
+
 CONFIG_PACKAGE_luci-i18n-ssr-plus-zh-cn=y
+# OpenClash comes from the luci openwrt-25.12 feed; mihomo is baked by the
+# workflow at /etc/openclash/core/clash_meta.
 CONFIG_PACKAGE_luci-app-openclash=y
 
 # --- DNS: dnsmasq-full ---------------------------------------------------------
-# Both plugins hard-depend on dnsmasq-full; leaving plain dnsmasq selected as
-# well breaks the image build with "Cannot install package dnsmasq-full".
+# Both proxy apps require dnsmasq-full; plain dnsmasq must not also be selected.
 # CONFIG_PACKAGE_dnsmasq is not set
 CONFIG_PACKAGE_dnsmasq-full=y
 CONFIG_PACKAGE_dnsmasq_full_nftset=y
 
-# --- kmods baked in (=y) -------------------------------------------------------
+# --- Firewall / kmods baked in (=y) --------------------------------------------
 # kmods installed later via opkg fail on kernel vermagic/hash mismatch, so
-# everything the proxies and NAT need must be in the image.
+# everything the proxies, NAT and WED-capable WiFi need is in the image.
+CONFIG_PACKAGE_firewall4=y
+CONFIG_PACKAGE_nftables-json=y
 CONFIG_PACKAGE_kmod-tun=y
 CONFIG_PACKAGE_kmod-inet-diag=y
 CONFIG_PACKAGE_kmod-nft-tproxy=y
 CONFIG_PACKAGE_kmod-nft-fullcone=y
+CONFIG_PACKAGE_kmod-nft-nat=y
+CONFIG_PACKAGE_kmod-nft-socket=y
 
 # --- WiFi ----------------------------------------------------------------------
 # Smallest wpad that still covers WPA2/WPA3-Personal (SAE), 802.11r and
@@ -70,13 +91,50 @@ CONFIG_PACKAGE_wpad-basic-mbedtls=y
 # CONFIG_PACKAGE_wpad-openssl is not set
 # CONFIG_PACKAGE_wpad-basic-wolfssl is not set
 
-# --- PPPoE WAN -------------------------------------------------------------------
+# --- Device / platform ---------------------------------------------------------
+CONFIG_PACKAGE_kmod-mt7915e=y
+CONFIG_PACKAGE_kmod-mt7986-firmware=y
+CONFIG_PACKAGE_mt7986-wo-firmware=y
+CONFIG_PACKAGE_kmod-leds-ws2812b=y
+CONFIG_PACKAGE_kmod-crypto-hw-safexcel=y
+CONFIG_PACKAGE_uboot-envtools=y
+CONFIG_PACKAGE_autocore-arm=y
+
+# --- WAN / IPv6 -----------------------------------------------------------------
 CONFIG_PACKAGE_ppp=y
 CONFIG_PACKAGE_ppp-mod-pppoe=y
+CONFIG_PACKAGE_odhcp6c=y
+CONFIG_PACKAGE_odhcpd-ipv6only=y
 
-# --- Runtime niceties --------------------------------------------------------------
+# --- Runtime niceties ------------------------------------------------------------
 CONFIG_PACKAGE_zram-swap=y
 CONFIG_PACKAGE_htpdate=y
 
+# --- UI extras deliberately kept ------------------------------------------------
+CONFIG_PACKAGE_luci-app-upnp=y
+CONFIG_PACKAGE_luci-app-ddns=y
+CONFIG_PACKAGE_ddns-scripts=y
+CONFIG_PACKAGE_luci-app-arpbind=y
+CONFIG_PACKAGE_luci-app-wol=y
+CONFIG_PACKAGE_luci-app-nlbwmon=y
+CONFIG_PACKAGE_nlbwmon=y
+CONFIG_PACKAGE_luci-app-autoreboot=y
+CONFIG_PACKAGE_htop=y
+CONFIG_PACKAGE_kmod-sched-core=y
+CONFIG_PACKAGE_kmod-sched-bpf=y
+CONFIG_PACKAGE_kmod-xdp-sockets-diag=y
+
+# iptables/ipset and the NAT helpers are left at lede's router defaults for
+# OpenClash compatibility. Do not trim them until both proxy modes are tested.
+
 # --- Trim -------------------------------------------------------------------------
+# CONFIG_PACKAGE_luci-app-vsftpd is not set
+# CONFIG_PACKAGE_vsftpd-alt is not set
+# CONFIG_PACKAGE_luci-app-vlmcsd is not set
+# CONFIG_PACKAGE_vlmcsd is not set
+# CONFIG_PACKAGE_luci-app-filetransfer is not set
+# CONFIG_PACKAGE_luci-app-accesscontrol is not set
+# CONFIG_PACKAGE_luci-app-turboacc is not set
+# CONFIG_PACKAGE_coremark is not set
+# CONFIG_PACKAGE_kmod-veth is not set
 # CONFIG_PACKAGE_kmod-phy-aquantia is not set

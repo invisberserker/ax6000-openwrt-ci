@@ -1,0 +1,83 @@
+#!/bin/sh
+# Switch the active proxy safely. Called from LuCI (Services -> Proxy Switch);
+# can also be run manually.
+#
+#   proxy-switch openclash   OpenClash + mihomo
+#   proxy-switch xray        luci-app-ssr-plus + Xray
+#   proxy-switch off         neither (direct internet)
+#
+# Always: stop both -> wait for cores -> restart dnsmasq + firewall -> start one.
+
+set -u
+
+MODE="${1:-}"
+case "$MODE" in
+	openclash|xray|off) ;;
+	*)
+		echo "usage: proxy-switch openclash|xray|off" >&2
+		exit 1
+		;;
+esac
+
+# Persist the choice and the boot-time state before stopping, so OpenClash's
+# stop routine sees enable=0 and cleans its residual DNS files.
+uci set proxy_switch.main.mode="$MODE"
+
+case "$MODE" in
+	openclash)
+		uci set openclash.config.enable=1
+		/etc/init.d/openclash enable 2>/dev/null || true
+		/etc/init.d/shadowsocksr disable 2>/dev/null || true
+		;;
+	xray)
+		uci set openclash.config.enable=0
+		/etc/init.d/openclash disable 2>/dev/null || true
+		/etc/init.d/shadowsocksr enable 2>/dev/null || true
+		;;
+	off)
+		uci set openclash.config.enable=0
+		/etc/init.d/openclash disable 2>/dev/null || true
+		/etc/init.d/shadowsocksr disable 2>/dev/null || true
+		;;
+esac
+
+uci commit proxy_switch
+uci commit openclash
+
+# Stop both. Their stop routines remove their own DNS snippets and nft chains.
+/etc/init.d/openclash stop 2>/dev/null || true
+/etc/init.d/shadowsocksr stop 2>/dev/null || true
+
+# Wait for the cores to exit before rebuilding the firewall/DNS state.
+i=0
+while [ "$i" -lt 15 ]; do
+	if ! pidof clash >/dev/null 2>&1 && ! pidof xray >/dev/null 2>&1; then
+		break
+	fi
+	sleep 1
+	i=$((i + 1))
+done
+if pidof clash >/dev/null 2>&1 || pidof xray >/dev/null 2>&1; then
+	logger -t proxy-switch "warning: a proxy core is still running before restart"
+fi
+
+# Clean base in all three modes.
+/etc/init.d/dnsmasq restart
+/etc/init.d/firewall restart
+
+case "$MODE" in
+	openclash)
+		/etc/init.d/openclash start
+		rc=$?
+		;;
+	xray)
+		/etc/init.d/shadowsocksr start
+		rc=$?
+		;;
+	off)
+		rc=0
+		;;
+esac
+
+logger -t proxy-switch "mode=$MODE rc=$rc"
+exit "$rc"

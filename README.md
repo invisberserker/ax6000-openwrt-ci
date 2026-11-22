@@ -1,29 +1,36 @@
 # Redmi AX6000 — self-built lede firmware (GitHub Actions)
 
-Push-button custom firmware for the **Xiaomi Redmi Router AX6000** (MediaTek
-MT7986A, 128 MB NAND, 512 MB RAM), built on **coolsnowwolf/lede master**
-(kernel 6.12, firewall4/nftables) with exactly what you want baked in and
-nothing else:
+Push-button firmware for the **Xiaomi Redmi Router AX6000** (MediaTek MT7986A,
+128 MB NAND, 512 MB RAM), built on **coolsnowwolf/lede master** with the
+default kernel (currently 6.18), firewall4/nftables and opkg.
+
+Primary proxy: **OpenClash + mihomo (Meta core)**. Backup proxy:
+**luci-app-ssr-plus + Xray**, used for VLESS-XTLS-REALITY when you do not want
+to touch the Clash config. Both are installed. Neither starts at boot until you
+select one in **Services → Proxy Switch**.
+
+## What is in / what is not
 
 | Baked in | Notes |
 |---|---|
-| `luci-app-ssr-plus` + **Xray core only** | from upstream `fw876/helloworld`; all other engines/helpers (Mihomo/SS/SSR/kcptun/naive/hysteria/tuic/obfs/geodata…) disabled in the seed |
-| `luci-app-openclash` | refreshed from upstream `vernesong/OpenClash` master |
-| **mihomo (clash_meta) core** | downloaded by the workflow, lands at `/etc/openclash/core/clash_meta` |
-| dnsmasq-full (nftset), kmod-tun / kmod-nft-tproxy / kmod-nft-fullcone / kmod-inet-diag | kmods are baked in `=y` because opkg-installed kmods fail on kernel-hash mismatch |
-| wpad-basic-mbedtls | smallest WPA3-Personal/802.11r/802.11w capable wpad |
-| ppp + pppoe, zram-swap, htpdate, argon theme, zh-cn LuCI | PPPoE WAN; RAM swap for the proxy cores; HTTP time sync (no RTC ⇒ TLS fails on cold boot otherwise) |
+| `luci-app-openclash` | from the luci `openwrt-25.12` feed; version 0.48.x |
+| **mihomo core** | v1.19.34, baked uncompressed at `/etc/openclash/core/clash_meta`; latest stable release at build time |
+| `luci-app-ssr-plus` + **Xray core only** | from the helloworld `dev` feed (198); all other proxy engines/helpers disabled; VLESS/XTLS/REALITY are features of the single `xray-core` binary (26.11.9) |
+| `dnsmasq-full` (nftset) | both proxy apps need it; plain `dnsmasq` is deselected |
+| kmod-tun, kmod-inet-diag, kmod-nft-tproxy, kmod-nft-fullcone, kmod-nft-nat, kmod-nft-socket | baked `=y`; later opkg kmods would fail on kernel hash mismatch |
+| `wpad-basic-mbedtls` | smallest WPA3-Personal/802.11r/802.11w-capable wpad |
+| ppp + pppoe, zram-swap, htpdate, argon theme, zh-cn LuCI | PPPoE WAN; RAM swap; HTTP time sync (no RTC) |
+| UPnP, DDNS, nlbwmon, autoreboot, htop, QoS/XDP kmods, arpbind, WOL | kept deliberately for a non-empty LuCI and optional daily use |
+| **Proxy Switch** LuCI page + `proxy-switch` helper | three options: OpenClash / Xray / Off; always restarts dnsmasq and firewall |
 
-Your **bootloader is never touched**: you keep the modded uboot and its
-recovery web page (hold **Reset** while powering on → set your PC to a static
-IP → `192.168.31.1`) as the brick safeguard, and day-to-day flashing stays
-web-UI sysupgrade + factory reset, exactly as with the mpdn builds.
+Not installed: FTP server, KMS server, parental controls, flow-offload/BBR UI,
+third theme, benchmark, virtual Ethernet (containers), file transfer UI,
+`luci-app-opkg` (replaced by `luci-app-package-manager`).
 
----
+The bootloader is never touched. The modified U-Boot and its recovery web page
+remain the brick safeguard.
 
-## Step 0 — pre-flight check (once, on the router, read-only)
-
-SSH into the router and run:
+## Step 0 — pre-flight check (read-only, on the router)
 
 ```sh
 ubus call system board
@@ -31,134 +38,197 @@ cat /proc/mtd
 fw_printenv mtd_layout_label 2>/dev/null
 ```
 
-Interpret `/proc/mtd`:
-
-| What you see | Meaning | Seed to use |
+| What you see | Meaning | Profile |
 |---|---|---|
-| One big `ubi` (≈ 108–112 MB) | custom-U-Boot big layout — expected, since your mpdn images run there | default (`...DEVICE_xiaomi_redmi-router-ax6000=y`) |
-| `ubi` 30M + `ubi1` 30M + `overlay` ~50M (or `ubi_kernel` 30M + `ubi` 80M) | stock-sized layout | swap to `...DEVICE_xiaomi_redmi-router-ax6000-stock=y` in `configs/ax6000.seed` |
+| One big `ubi` (~108–112 MB) | immortalwrt-mt798x / custom-U-Boot 110m layout | default `xiaomi_redmi-router-ax6000` |
+| `ubi_kernel` 30M + `ubi` 80M | U-Boot “default” layout | `..._DEVICE_xiaomi_redmi-router-ax6000-stock` |
+| `ubi` 30M + `ubi1` 30M + `overlay` ~50M | Xiaomi stock layout | **neither profile** — switch layout in U-Boot first |
+| `rsv0` 1M + `ubi` 110M | QWRT layout | **not compatible** — switch layout in U-Boot first |
 
-`fw_printenv mtd_layout_label` printing something (e.g. `default` or
-`immortalwrt-110m`) confirms the uboot is hanwckf's bl-mt798x and shows its
-current mode. If the mode disagrees with what `/proc/mtd` shows under your
-running firmware, trust `/proc/mtd` — layouts are only ever switched from the
-uboot recovery page, and the running firmware always matches the active mode.
+`fw_printenv mtd_layout_label` should print `immortalwrt-110m` for the default
+profile, or `default` for the stock/U-Boot-default profile. Confirm
+`board_name` from `ubus call system board` is `xiaomi,redmi-router-ax6000` for
+the default profile.
 
-## Setup (one time)
-
-1. Create a **public** GitHub repo (public ⇒ free 4-core/16 GB runners;
-   private works too but uses slower 2-core runners and billed minutes).
-   Nothing secret lives in this repo — subscription URLs are entered on the
-   router at runtime, never committed.
-2. Push this folder's contents to the repo:
-   ```sh
-   cd ax6000-openwrt-ci
-   git init && git add -A && git commit -m "ax6000 build ci"
-   git remote add origin git@github.com:<you>/<repo>.git
-   git push -u origin main
-   ```
-3. Repo → **Actions** tab → enable workflows if asked.
+**Changing partition layout must be done in U-Boot, and the firmware flashed
+from the U-Boot recovery page — never by sysupgrade from the running system.**
+For the AX6000 the recovery page is `192.168.31.1`; set the PC to
+`192.168.31.100`, hold Reset while powering on for ~15 s.
 
 ## Build
 
-Actions → **Build lede for Redmi AX6000** → *Run workflow* → (optionally
-override the mihomo core version) → Run.
+Actions → **Build lede for Redmi AX6000** → **Run workflow**. There are no
+version inputs: mihomo, the config and the helper scripts are pinned in the
+repo/workflow.
 
-- First run ≈ 2–3 h; the `dl/` cache makes later runs noticeably faster.
-- Download the `ax6000-firmware-<run#>` artifact and unzip it. You want
-  `bin/targets/mediatek/filogic/*sysupgrade*.bin` for your profile. The
-  artifact also contains the kmod ipks (usable as a self-hosted feed later)
-  and `diffconfig.txt` — the exact config that was built.
+- The workflow builds from lede/feed **current heads**. Every run records the
+  exact `lede`, feed and mihomo revisions in `sources.lock`, and uploads it
+  with the image. That is the rollback record, not a forward-compatibility
+  promise: a later feed snapshot is still a fresh build.
+- A successful build also creates a **GitHub Release** with the sysupgrade
+  image, manifest, `SHA256SUMS`, `sources.lock`, `diffconfig.txt` and build
+  log. Artifacts alone expire after 30 days.
+- The workflow fails fast if a required symbol/package is missing, a forbidden
+  engine appears, the image exceeds 100 MB, or the sysupgrade `BOARD` does not
+  match the AX6000 profile. It does not silently ship a wrong config.
+
+Download the `ax6000-firmware-<run>` artifact or the release. The sysupgrade
+image is `bin/targets/mediatek/filogic/*sysupgrade*.bin`.
 
 ## Flash
 
-LuCI → System → Backup / Flash Firmware → upload the `sysupgrade.bin`,
-**uncheck "Keep settings"** (your factory-reset habit). Same-profile rebuilds
-can also be flashed with settings kept.
+LuCI → System → Backup / Flash Firmware → upload the sysupgrade image →
+**uncheck “Keep settings”** for the first flash (or when changing firmware
+lineage), check it for a same-profile rebuild.
 
-Recovery path if a ROM ever fails to boot: power off, hold Reset, power on,
-hold ~15 s → recovery page at `192.168.31.1` → flash a known-good image.
+Before flashing, test the image on the router:
 
-## Post-flash checklist (runtime, not baked)
+```sh
+sysupgrade -T /tmp/openwrt-mediatek-filogic-xiaomi_redmi-router-ax6000-squashfs-sysupgrade.bin
+```
 
-1. **Only one proxy engine at a time.** OpenClash is the workhorse; disable
-   ssr-plus autostart: System → Startup → `shadowsocksr` → Disable. If you
-   ever switch engines: stop the old one first, then restart dnsmasq +
-   firewall (both engines fight over DNS/port 53 and nft rules).
-2. **Flow offloading OFF while proxying**: Network → Firewall → General
-   Settings → uncheck *Software flow offloading* (and hardware, if shown).
-   Offloaded flows bypass the proxy's TPROXY/TUN path (leaks + broken
-   connections). Leave **Packet steering ON** (Network → Interfaces → Global
-   network options) — that's what keeps ~1 Gbps NAT on the 4×A53 without
-   offload.
-3. **OpenClash core**: LuCI → Services → OpenClash → Version Update should
-   show the Meta core at `/etc/openclash/core/clash_meta` (the baked mihomo).
-   It stays updatable from that page. Optional: enable 小闪存模式 (small-flash
-   mode) to keep runtime churn in `/tmp`.
-4. **WED** (WiFi Ethernet Dispatch): check
-   `cat /sys/module/mt7915e/parameters/wed_enable` — if `N`, follow the
-   OpenWrt WED doc (`options mt7915e wed_enable=Y`). 5 GHz only; `bridger`
-   is already in the image for AP-mode bridging.
-5. **Fullcone NAT**: Network → Firewall → enable *Fullcone* (the kmod is
-   baked in).
-6. **Time sync**: System → Time Synchronization — htpdate is included;
-   confirm the clock is right before trusting subscription/TLS errors.
-7. **PPPoE + WiFi credentials**: re-enter after a factory-reset flash; set a
-   root password on first boot (default `192.168.1.1`, no password).
-8. **IPv6**: left at lede defaults. If IPv6 traffic leaks around the proxy,
-   set `wan6` to disabled / turn off RA on the LAN — a runtime preference.
+If `-T` rejects it, do not flash it.
+
+Recovery if a ROM ever fails to boot: power off, hold Reset, power on, hold
+~15 s → `192.168.31.1` → flash a known-good sysupgrade/factory image. Keep the
+last known-good image offline; GitHub is not a decade archive.
+
+## First boot and Proxy Switch
+
+1. Configure WAN (PPPoE) and WiFi. The default LAN IP is `192.168.1.1`; set a
+   root password immediately.
+2. **Neither proxy is running.** OpenClash ships `enable=0`; ssr-plus is
+   disabled at the rc.d level because its `boot()` always calls `start()` and
+   does not check an enable flag.
+3. Open **Services → Proxy Switch** and choose exactly one:
+
+   - **Off (direct internet)**
+   - **OpenClash (mihomo)**
+   - **Xray (ssr-plus)**
+
+   Switching stops both, waits for `clash`/`xray` to exit, restarts dnsmasq
+   and firewall, then starts the selected one. Existing connections drop
+   during the switch. The choice is persisted, so after a reboot only that
+   proxy starts.
+
+Do not use the per-app Enable toggles as the master control; use Proxy Switch.
+If you enable one app manually while the other is running, you can still create
+a DNS/nftables conflict.
+
+### Xray / VLESS-XTLS-REALITY
+
+In ssr-plus add a server, choose **VLESS**, enable **REALITY**, and fill public
+key, short ID, spiderX, fingerprint and `xtls-rprx-vision` as required. This is
+the only Xray protocol configured; no other engine is installed. The current
+helloworld `dev` UI exposes these fields, and `xray-core` 26.11.9 supports
+standard VLESS-REALITY (including the newer ML-DSA-65 field).
+
+### OpenClash / mihomo
+
+The baked core is at `/etc/openclash/core/clash_meta` and is detected by
+OpenClash. You can upgrade it manually in LuCI. A sysupgrade restores the
+baked version unless you preserve `/etc/openclash/core/` in
+`/etc/sysupgrade.conf`; the default preserve list only keeps OpenClash
+configuration, custom rules and overwrite files.
+
+## Post-flash checklist
+
+1. **Only one proxy active.** Use Services → Proxy Switch.
+2. **Flow offloading is already off** and **packet steering is already on**
+   via `files/etc/uci-defaults/99-router-defaults`. Don’t turn offloading back
+   on while proxying; offloaded flows bypass TPROXY/TUN.
+3. **OpenClash core** should show mihomo v1.19.34 at
+   `/etc/openclash/core/clash_meta`.
+4. **WED** is optional. `bridger` is not installed by default; if you enable
+   WED, add `CONFIG_PACKAGE_bridger=y` and the `mt7915e wed_enable=Y` module
+   option. Leave it off unless you need it.
+5. **Fullcone NAT** is available in Firewall settings (kmod baked in).
+6. **Time sync**: htpdate is enabled; confirm the clock before debugging TLS or
+   REALITY failures on a cold boot.
+7. **UPnP** is installed and kept deliberately; it can open WAN holes. Enable
+   it only for devices that need it.
+8. **IPv6** is left at lede defaults. If IPv6 leaks around the proxy, disable
+   `wan6`/RA on LAN as a runtime preference.
+9. **OpenClash and ssr-plus configs are preserved** across sysupgrade with
+   “Keep settings” via `files/etc/sysupgrade.conf`.
 
 ## Maintenance
 
-- **Change plugins / trim more**: edit `configs/ax6000.seed` → push → Run
-  workflow. The workflow log prints the resolved config; unknown symbols are
-  silently dropped by `make defconfig`, so verify yours appear there.
-- **Bump the clash core**: Run workflow with a newer `mihomo_version` input
-  (release tags of MetaCubeX/mihomo), or update it later from LuCI.
-- **Rebuild cadence**: lede master moves daily; rebuilding every month or so
-  picks up kernel/security fixes. Every rebuild is a plain sysupgrade.
+- **Update firmware**: just run the workflow again. It follows lede master and
+  current feed heads, records them in `sources.lock`, and creates a release if
+  the build passes.
+- **Bump mihomo**: change `MIHOMO_VERSION` and `MIHOMO_SHA256` in
+  `.github/workflows/openwrt-build.yml` (latest stable tag; ignore
+  `Prerelease-Alpha`). The workflow checks the SHA and ELF architecture.
+- **Bump Xray**: the helloworld `dev` feed currently carries 26.11.9. The
+  `dev` branch is used deliberately because it has the current ssr-plus (198)
+  and xray-core; pin/bump via `configs/feeds.conf` if you want a specific feed
+  revision.
+- **Change packages**: edit `configs/ax6000.seed` and run the workflow. The
+  verifier prints and fails on missing/forbidden symbols.
+- **Known-good rollback**: keep the release image and `sources.lock`. If a later
+  build fails, the lock is the exact tree to reproduce or bisect.
 
-## Local debug build (only if CI fails)
+## Local debug build
 
-Your ARM64 VM (2 cores / 3.8 GB) can build this natively — expect ~5–8 h:
+Use the same repo files; don’t reproduce a different tree.
 
 ```sh
-sudo apt install build-essential clang flex bison gawk gettext libncurses-dev \
-  libssl-dev libelf-dev zlib1g-dev python3-setuptools python3-pip rsync swig \
-  unzip file wget curl ccache
-git clone --depth 1 https://github.com/coolsnowwolf/lede && cd lede
-/path/to/ax6000-openwrt-ci/diy-part1.sh
+sudo apt install build-essential clang flex bison gawk gettext intltool \
+  autoconf automake libtool cmake ninja-build pkgconf libncurses-dev \
+  libssl-dev libelf-dev zlib1g-dev liblzma-dev libbz2-dev libzstd-dev \
+  libyaml-dev libreadline-dev libgmp-dev libffi-dev libpcre2-dev \
+  libglib2.0-dev libmpc-dev libmpfr-dev libpython3-dev \
+  python3 python3-setuptools python3-pip python3-wheel python3-ply \
+  device-tree-compiler bc cpio patch rsync swig squashfs-tools xz-utils \
+  zstd bzip2 unzip file wget curl git subversion ccache jq xxd texinfo \
+  gperf re2c
+
+git clone --depth 1 https://github.com/coolsnowwolf/lede openwrt
+mkdir -p openwrt/files
+cp -a files/. openwrt/files/
+cp configs/feeds.conf openwrt/feeds.conf
+cd openwrt
 ./scripts/feeds update -a && ./scripts/feeds install -a
-/path/to/ax6000-openwrt-ci/diy-part2.sh
 mkdir -p files/etc/openclash/core
-curl -fsSL https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-arm64-v1.19.33.gz \
-  | gunzip > files/etc/openclash/core/clash_meta && chmod +x files/etc/openclash/core/clash_meta
-cp /path/to/ax6000-openwrt-ci/configs/ax6000.seed .config && make defconfig
+curl --retry 5 -fsSL -o /tmp/mihomo.gz \
+  https://github.com/MetaCubeX/mihomo/releases/download/v1.19.34/mihomo-linux-arm64-v1.19.34.gz
+echo "daaf78a6240a282cdfd75bcbf98fe321f6bd52765cc29e79f344191198f0b50f  /tmp/mihomo.gz" | sha256sum -c -
+gunzip -c /tmp/mihomo.gz > files/etc/openclash/core/clash_meta
+chmod 755 files/etc/openclash/core/clash_meta
+cp ../configs/ax6000.seed .config
+make defconfig
+../scripts/verify-config.sh .config
 make download -j2
-make -j2 || make V=s -j1     # on failure, the serial verbose pass names the culprit
+make -j2 V=s 2>&1 | tee build.log
+../scripts/verify-manifest.sh bin/targets/mediatek/filogic
 ```
 
-## Traps encoded in this repo (so you don't rediscover them)
+On a 2-core / 3.8 GB VM use `-j1` or add swap; `-j2` can OOM during Go/Ruby
+builds. No serial fallback is baked into CI; inspect `build.log` on failure.
 
-- **dnsmasq vs dnsmasq-full**: both plugins need `-full`; keeping both
-  selected breaks the image build. Seed forces `-full` and unsets plain.
-- **No clash core in the ipk**: the workflow bakes mihomo into
-  `files/etc/openclash/core/clash_meta`; first-launch download would need
-  direct GitHub access from the router.
-- **kmod vermagic**: later `opkg install kmod-*` fails against official feeds
-  (different kernel hash) — everything needed is baked `=y`.
-- **Proxy vs flow offloading**: see checklist #2.
-- **Dual-engine DNS conflict**: see checklist #1.
-- **No-RTC TLS failures on cold boot**: htpdate included.
-- **wpad variant bloat**: basic-mbedtls keeps WPA3-Personal/11r/11w at the
-  smallest size.
-- **Xray build needs host clang**: installed in the workflow's dependency
-  step.
+## Source map / traps
 
-## Sources behind these choices
+- **ssr-plus + xray-core** live in the `fw876/helloworld` `dev` branch feed
+  (ssr-plus 198, xray-core 26.11.9). lede no longer bundles ssr-plus under
+  `package/lean`.
+- **OpenClash** lives in the luci `openwrt-25.12` feed and is the same 0.48.x
+  as upstream. No clone/shadowing scripts are needed; the old `diy-part*.sh`
+  have been removed.
+- **mihomo** is not a package used by OpenClash; it is the baked core binary.
+- **luci-app-opkg does not exist** in the 25.12 luci feed; the package manager
+  is `luci-app-package-manager`.
+- **ssr-plus boot ignores enable**: disable its rc.d symlink; the Proxy Switch
+  page handles this.
+- **OpenClash conffiles are empty**: `sysupgrade.conf` preserves its config.
+- **No flow offload** while proxying; this is baked off.
+- **No dual proxy**: the switch helper stops both before starting one.
+- **No-RTC TLS failures**: htpdate is included and enabled.
+- **Baked core size**: 55 MB uncompressed, but only ~14 MB in the xz squashfs;
+  the 110 MB UBI has room for both mihomo and Xray.
 
-hanwckf/immortalwrt-mt798x README + bl-mt798x docs · openwrt.org TOH
-Redmi AX6000 (layouts, exploit) · fw876/helloworld README + Makefile ·
-vernesong/OpenClash README/issues #399 (baking cores) · MetaCubeX/mihomo
-releases · openwrt.org flow-offloading + WED docs · P3TERX/Actions-OpenWrt
-CI patterns.
+## Sources
+
+coolsnowwolf/lede · coolsnowwolf/luci · coolsnowwolf/packages ·
+fw876/helloworld · vernesong/OpenClash · MetaCubeX/mihomo ·
+hanwckf/bl-mt798x · OpenWrt flow-offloading/WED docs.

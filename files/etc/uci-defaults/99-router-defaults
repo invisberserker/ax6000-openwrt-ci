@@ -1,0 +1,17 @@
+#!/bin/sh
+# Router defaults that are safe for the proxy path.
+
+# Offloading bypasses TPROXY/TUN and leaks proxy traffic.
+uci -q set firewall.@defaults[0].flow_offloading='0'
+uci -q set firewall.@defaults[0].flow_offloading_hw='0'
+uci -q commit firewall
+
+# Keeps ~1 Gbps NAT on the 4x A53 without offload.
+uci -q get network.globals >/dev/null 2>&1 || uci -q set network.globals='globals'
+uci -q set network.globals.packet_steering='1'
+uci -q commit network
+
+# No RTC: get the clock right before TLS/REALITY is used.
+[ -x /etc/init.d/htpdate ] && /etc/init.d/htpdate enable
+
+exit 0
