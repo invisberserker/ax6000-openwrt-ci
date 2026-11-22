@@ -50,13 +50,14 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential clang flex bison gawk gettext intltool \
-            autoconf automake libtool cmake ninja-build pkgconf \
+            build-essential binutils clang flex bison gawk gettext intltool \
+            autoconf automake autopoint libtool cmake ninja-build pkgconf \
             libncurses-dev libssl-dev libelf-dev zlib1g-dev \
             liblzma-dev libbz2-dev libzstd-dev libyaml-dev libreadline-dev \
-            libgmp-dev libffi-dev libpcre2-dev libglib2.0-dev \
+            libgmp-dev libffi-dev libpcre2-dev libglib2.0-dev libltdl-dev \
             libmpc-dev libmpfr-dev libpython3-dev \
             python3 python3-setuptools python3-pip python3-wheel python3-ply \
+            python3-pyelftools p7zip-full \
             device-tree-compiler bc cpio patch rsync swig squashfs-tools \
             xz-utils zstd bzip2 unzip file wget curl git subversion ccache \
             jq xxd texinfo gperf re2c
@@ -76,6 +77,15 @@ jobs:
           [ "$ok" -eq 1 ] || { echo "lede clone failed" >&2; exit 1; }
           git -C openwrt log -1 --format='- lede @ %h (%cd)' --date=short >> "$GITHUB_STEP_SUMMARY"
           df -h .
+
+      - name: Verify host prerequisites
+        working-directory: openwrt
+        run: make prereq
+
+      - name: Patch default-settings password guard
+        run: |
+          chmod +x scripts/patch-default-settings.sh
+          ./scripts/patch-default-settings.sh openwrt
 
       - name: Install repository overlay
         run: |
@@ -142,6 +152,7 @@ jobs:
           set -euo pipefail
           {
             echo "generated_at=$(date -u +%FT%TZ)"
+            echo "repo=$(git rev-parse HEAD)"
             echo "lede=$(git -C openwrt rev-parse HEAD)"
             for d in openwrt/feeds/*; do
               if [ -d "$d/.git" ]; then
@@ -188,7 +199,7 @@ jobs:
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ax6000-firmware-${{ github.run_number }}
+          name: ax6000-firmware-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             openwrt/bin/targets/mediatek/filogic/
             openwrt/build.log
@@ -220,7 +231,7 @@ jobs:
         if: failure() || cancelled()
         uses: actions/upload-artifact@v4
         with:
-          name: ax6000-build-logs-${{ github.run_number }}
+          name: ax6000-build-logs-${{ github.run_number }}-${{ github.run_attempt }}
           path: |
             openwrt/build.log
             openwrt/sources.lock

@@ -14,4 +14,9 @@ uci -q commit network
 # No RTC: get the clock right before TLS/REALITY is used.
 [ -x /etc/init.d/htpdate ] && /etc/init.d/htpdate enable
 
+# Keep ad-hoc OpenClash core updates / caches in RAM (/tmp), not the small
+# writable overlay. They do not survive a reboot; the baked core is restored.
+uci -q set openclash.config.small_flash_memory='1'
+uci -q commit openclash
+
 exit 0

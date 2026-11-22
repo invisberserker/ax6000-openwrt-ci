@@ -1,5 +1,7 @@
 #!/bin/sh
 # First-boot defaults: neither proxy starts until selected in LuCI.
+# This runs on the first boot of every new rootfs, including a sysupgrade with
+# "Keep settings", so an upgrade intentionally resets the active proxy to Off.
 # ssr-plus has no UCI enable guard (its boot() always calls start()), so the
 # rc.d symlink is the reliable switch for it.
 

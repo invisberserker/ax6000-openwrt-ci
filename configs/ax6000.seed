@@ -38,6 +38,9 @@ CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn=y
 # ipt2socks are hard UI dependencies, not selectable engines.
 CONFIG_PACKAGE_luci-app-ssr-plus=y
 CONFIG_PACKAGE_xray-core=y
+# Xray's built-in NaiveProxy/Cronet outbound is not wanted. This is separate
+# from the luci-app-ssr-plus INCLUDE_NaiveProxy package option below.
+# CONFIG_XRAY_CORE_NAIVE is not set
 CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Xray=y
 CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_NONE_Client=y
 CONFIG_PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_NONE_Server=y
@@ -71,6 +74,11 @@ CONFIG_PACKAGE_luci-app-openclash=y
 # CONFIG_PACKAGE_dnsmasq is not set
 CONFIG_PACKAGE_dnsmasq-full=y
 CONFIG_PACKAGE_dnsmasq_full_nftset=y
+# Keep ipset support for the deliberately retained iptables fallback.
+CONFIG_PACKAGE_dnsmasq_full_ipset=y
+# The built-in TFTP server is not used.
+# CONFIG_PACKAGE_dnsmasq_full_tftp is not set
+CONFIG_PACKAGE_ipset=y
 
 # --- Firewall / kmods baked in (=y) --------------------------------------------
 # kmods installed later via opkg fail on kernel vermagic/hash mismatch, so
@@ -128,6 +136,9 @@ CONFIG_PACKAGE_kmod-xdp-sockets-diag=y
 # OpenClash compatibility. Do not trim them until both proxy modes are tested.
 
 # --- Trim -------------------------------------------------------------------------
+# DDNS provider scripts are optional; the base ddns-scripts package stays.
+# CONFIG_PACKAGE_ddns-scripts_aliyun is not set
+# CONFIG_PACKAGE_ddns-scripts_dnspod is not set
 # CONFIG_PACKAGE_luci-app-vsftpd is not set
 # CONFIG_PACKAGE_vsftpd-alt is not set
 # CONFIG_PACKAGE_luci-app-vlmcsd is not set

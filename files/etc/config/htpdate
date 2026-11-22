@@ -1,0 +1,13 @@
+config htpdate 'htpdate'
+	option enabled 1
+	# Chinese HTTP endpoints; htpdate only needs the Date: header.
+	list server 'www.baidu.com'
+	list server 'www.qq.com'
+	list server 'www.taobao.com'
+	list server 'www.jd.com'
+	option proxy_host ''
+	option proxy_port '8080'
+	option debug 0
+	option sanity_check 1
+	# WAN is PPPoE IPv4; avoid an IPv6 route failure on cold boot.
+	list option '-4'

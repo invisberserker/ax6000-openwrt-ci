@@ -1,0 +1,15 @@
+#!/bin/sh
+# Treat the firmware as immutable: no remote opkg feeds.
+# Packages shipped in the image are tested together; changing them at runtime
+# can install kmods/userspace packages that do not match this kernel/ABI.
+# Rebuild the image instead.
+
+: > /etc/opkg/distfeeds.conf
+[ -f /etc/apk/repositories.d/distfeeds.list ] && : > /etc/apk/repositories.d/distfeeds.list
+
+# lede's default-settings strips this; restore it for any local .ipk installs.
+if [ -f /etc/opkg.conf ] && ! grep -q '^option check_signature' /etc/opkg.conf; then
+	echo 'option check_signature 1' >> /etc/opkg.conf
+fi
+
+exit 0

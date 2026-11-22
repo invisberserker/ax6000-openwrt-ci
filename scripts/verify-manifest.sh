@@ -56,6 +56,7 @@ for p in \
 	luci-app-autoreboot \
 	htop \
 	dnsmasq-full \
+	ipset \
 	kmod-tun \
 	kmod-inet-diag \
 	kmod-nft-tproxy \
@@ -83,6 +84,9 @@ done
 
 # Must not be present
 for p in \
+	dnsmasq \
+	ddns-scripts_aliyun \
+	ddns-scripts_dnspod \
 	luci-app-vsftpd \
 	vsftpd-alt \
 	luci-app-vlmcsd \

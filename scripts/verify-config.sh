@@ -16,8 +16,8 @@ require() {
 }
 forbid() {
 	local sym="$1"
-	if grep -qx "CONFIG_${sym}=y" "$CFG"; then
-		echo "verify-config: forbidden CONFIG_${sym}=y" >&2
+	if grep -qE "^CONFIG_${sym}=[ym]$" "$CFG"; then
+		echo "verify-config: forbidden CONFIG_${sym}=y/m" >&2
 		fail=1
 	fi
 }
@@ -32,6 +32,10 @@ require PACKAGE_luci-app-package-manager
 require PACKAGE_luci-proto-ppp
 require PACKAGE_luci-theme-bootstrap
 require PACKAGE_luci-theme-argon
+require PACKAGE_luci-i18n-base-zh-cn
+require PACKAGE_luci-i18n-firewall-zh-cn
+require PACKAGE_luci-i18n-package-manager-zh-cn
+require PACKAGE_luci-i18n-ssr-plus-zh-cn
 
 # OpenClash + mihomo (binary is baked by the workflow)
 require PACKAGE_luci-app-openclash
@@ -39,6 +43,7 @@ require PACKAGE_luci-app-openclash
 # ssr-plus + Xray, with no other proxy engine selected
 require PACKAGE_luci-app-ssr-plus
 require PACKAGE_xray-core
+forbid XRAY_CORE_NAIVE
 require PACKAGE_luci-app-ssr-plus_INCLUDE_Xray
 require PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_NONE_Client
 require PACKAGE_luci-app-ssr-plus_INCLUDE_Shadowsocks_NONE_Server
@@ -63,6 +68,9 @@ forbid PACKAGE_luci-app-ssr-plus_INCLUDE_MosDNS
 # DNS / firewall / proxy kmods
 require PACKAGE_dnsmasq-full
 require PACKAGE_dnsmasq_full_nftset
+require PACKAGE_dnsmasq_full_ipset
+require PACKAGE_ipset
+forbid PACKAGE_dnsmasq_full_tftp
 forbid PACKAGE_dnsmasq
 require PACKAGE_firewall4
 require PACKAGE_nftables-json
@@ -109,6 +117,8 @@ require PACKAGE_kmod-sched-bpf
 require PACKAGE_kmod-xdp-sockets-diag
 
 # Deliberately removed
+forbid PACKAGE_ddns-scripts_aliyun
+forbid PACKAGE_ddns-scripts_dnspod
 forbid PACKAGE_luci-app-vsftpd
 forbid PACKAGE_vsftpd-alt
 forbid PACKAGE_luci-app-vlmcsd
