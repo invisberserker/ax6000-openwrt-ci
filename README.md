@@ -65,10 +65,12 @@ For the AX6000 the recovery page is `192.168.31.1`; set the PC to
 
 ## Build
 
-Actions → **Build lede for Redmi AX6000** → **Run workflow**. There are no
-version inputs: mihomo, the config and the helper scripts are pinned in the
-repo/workflow.
+Actions → **Build lede for Redmi AX6000** → **Run workflow**. The only input
+is optional `lede_ref` (default `master`); mihomo, the config and the helper
+scripts are pinned in the repo/workflow.
 
+- `lede_ref` pins the lede tree to a commit, branch or tag for a rollback run.
+  A full commit SHA is best. Feeds still come from current heads.
 - The workflow builds from lede/feed **current heads**. It runs `make prereq`,
   patches the default-settings password guard, and records the exact `lede`,
   feed, repo and mihomo revisions in `sources.lock`, and uploads it with the
@@ -180,6 +182,11 @@ custom rules and overwrite files.
 - **Update firmware**: just run the workflow again. It follows lede master and
   current feed heads, records them in `sources.lock`, and creates a release if
   the build passes.
+- **If master is broken**: check lede's own Actions history for the last green
+  scheduled build, then rerun this workflow with `lede_ref=<that commit>`. This
+  rolls back lede only; feeds remain current. If that fails because feeds also
+  drifted, use the feed revisions in the last successful release's
+  `sources.lock`, or restore the last good release image.
 - **Bump mihomo**: change `MIHOMO_VERSION` and `MIHOMO_SHA256` in
   `.github/workflows/openwrt-build.yml` (use a stable tag; ignore
   `Prerelease-Alpha`). The workflow checks the SHA and ELF architecture.
@@ -192,8 +199,10 @@ custom rules and overwrite files.
 - **Do not install packages from remote feeds**: `99-zz-immutable-opkg` clears
   the opkg feeds and restores signature checking. Baked packages are tested
   together; runtime installs can mismatch this kernel/ABI. Rebuild instead.
-- **Known-good rollback**: keep the release image and `sources.lock`. If a later
-  build fails, the lock is the exact tree to reproduce or bisect.
+- **Known-good rollback**: keep the release image and `sources.lock`. The image
+  is the fast emergency path; the lock records the exact lede/feed/mihomo tree
+  for a later `lede_ref` rebuild or bisect. `sources.lock` attached to a failed
+  build identifies the tree but is not a known-good release.
 
 ## Local debug build
 

@@ -2,10 +2,16 @@ name: Build lede for Redmi AX6000
 
 on:
   workflow_dispatch:
+    inputs:
+      lede_ref:
+        description: "lede commit/branch to build (default: master)"
+        required: false
+        default: "master"
 
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
   REPO_BRANCH: master
+  LEDE_REF: ${{ github.event.inputs.lede_ref || 'master' }}
   CONFIG_FILE: configs/ax6000.seed
   TZ: Asia/Shanghai
   MIHOMO_VERSION: v1.19.34
@@ -75,6 +81,10 @@ jobs:
             sleep 15
           done
           [ "$ok" -eq 1 ] || { echo "lede clone failed" >&2; exit 1; }
+          if [ "${LEDE_REF:-master}" != "$REPO_BRANCH" ]; then
+            git -C openwrt fetch --depth 1 origin "$LEDE_REF"
+            git -C openwrt checkout --detach FETCH_HEAD
+          fi
           git -C openwrt log -1 --format='- lede @ %h (%cd)' --date=short >> "$GITHUB_STEP_SUMMARY"
           df -h .
 
@@ -153,6 +163,7 @@ jobs:
           {
             echo "generated_at=$(date -u +%FT%TZ)"
             echo "repo=$(git rev-parse HEAD)"
+            echo "lede_ref=${LEDE_REF}"
             echo "lede=$(git -C openwrt rev-parse HEAD)"
             for d in openwrt/feeds/*; do
               if [ -d "$d/.git" ]; then
