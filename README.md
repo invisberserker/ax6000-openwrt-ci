@@ -43,20 +43,47 @@ layout in U-Boot first.
 ```sh
 ubus call system board
 cat /proc/mtd
+
+# Optional: U-Boot environment, if uboot-envtools is installed/configured.
+# This is metadata about the bootloader's selected layout, not a UBI reader.
 fw_printenv mtd_layout_label 2>/dev/null
+
+# Peek inside the UBI partition. Expected on the 110m layout:
+# volumes kernel, rootfs, rootfs_data.
+ubinfo -a
 ```
 
 | What you see | Meaning | Profile |
 |---|---|---|
-| One big `ubi` (~108–112 MB) | immortalwrt-mt798x / custom-U-Boot 110m layout | default `xiaomi_redmi-router-ax6000` |
+| One big `ubi` (~108–112 MB), and `ubinfo -a` shows `kernel` + `rootfs` + `rootfs_data` | immortalwrt-mt798x / custom-U-Boot 110m layout | default `xiaomi_redmi-router-ax6000` |
 | `ubi_kernel` 30M + `ubi` 80M | U-Boot “default” layout | `..._DEVICE_xiaomi_redmi-router-ax6000-stock` |
 | `ubi` 30M + `ubi1` 30M + `overlay` ~50M | Xiaomi stock layout | **neither profile** — switch layout in U-Boot first |
 | `rsv0` 1M + `ubi` 110M | QWRT layout | **not compatible** — switch layout in U-Boot first |
 
-`fw_printenv mtd_layout_label` should print `immortalwrt-110m` for the default
-profile, or `default` for the stock/U-Boot-default profile. Confirm
-`board_name` from `ubus call system board` is `xiaomi,redmi-router-ax6000` for
-the default profile.
+`/proc/mtd` is the authoritative view of the **MTD partitions** the running
+kernel sees. The alternatives above are different MTD partition layouts, not
+hidden UBI volumes. `ubinfo -a` looks **inside** the UBI partition and confirms
+the expected `kernel`/`rootfs`/`rootfs_data` volumes.
+
+`fw_printenv` is optional. It reads the U-Boot environment, not the MTD block;
+`mtd_layout_label` is an environment variable, not an MTD name such as `ubi`
+or `mtd7`. If `fw_printenv` is missing, its config is missing, or the
+bootloader does not expose the variable, a blank result or exit status 1 is
+**not** a layout failure. When it works, it prints `immortalwrt-110m` for the
+default profile, or `default` for the stock/U-Boot-default profile.
+
+For exact offsets and sizes:
+
+```sh
+for d in /sys/class/mtd/mtd*; do
+    [ -e "$d/name" ] || continue
+    echo "$(cat "$d/name") offset=$(cat "$d/offset") size=$(cat "$d/size")"
+done
+```
+
+`mtdinfo` is not guaranteed to be installed; `ubinfo -a` is sufficient for the
+inner-volume check. Confirm `board_name` from `ubus call system board` is
+`xiaomi,redmi-router-ax6000` for the default profile.
 
 **Changing partition layout must be done in U-Boot, and the firmware flashed
 from the U-Boot recovery page — never by sysupgrade from the running system.**
