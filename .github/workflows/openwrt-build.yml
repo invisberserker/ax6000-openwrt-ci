@@ -90,7 +90,12 @@ jobs:
 
       - name: Verify host prerequisites
         working-directory: openwrt
-        run: make prereq
+        # Run the check target directly: `make prereq` depends on .config and,
+        # on a fresh clone, would launch the interactive ncurses menuconfig.
+        run: |
+          set -euo pipefail
+          mkdir -p tmp
+          make -r -s -j1 -f include/prereq-build.mk TOPDIR="$PWD" prereq
 
       - name: Patch default-settings password guard
         run: |

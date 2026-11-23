@@ -98,11 +98,12 @@ scripts are pinned in the repo/workflow.
 
 - `lede_ref` pins the lede tree to a commit, branch or tag for a rollback run.
   A full commit SHA is best. Feeds still come from current heads.
-- The workflow builds from lede/feed **current heads**. It runs `make prereq`,
-  patches the default-settings password guard, and records the exact `lede`,
-  feed, repo and mihomo revisions in `sources.lock`, and uploads it with the
-  image. That is the rollback record, not a forward-compatibility promise: a
-  later feed snapshot is still a fresh build.
+- The workflow builds from lede/feed **current heads**. It verifies the host
+  toolchain non-interactively (`include/prereq-build.mk`, so no `menuconfig`
+  is opened), patches the default-settings password guard, and records the
+  exact `lede`, feed, repo and mihomo revisions in `sources.lock`, and uploads
+  it with the image. That is the rollback record, not a forward-compatibility
+  promise: a later feed snapshot is still a fresh build.
 - A successful build also creates a **GitHub Release** with the sysupgrade
   image, manifest, `SHA256SUMS`, `sources.lock`, `diffconfig.txt` and build
   log. Artifacts alone expire after 30 days.
@@ -248,7 +249,9 @@ sudo apt install build-essential binutils clang flex bison gawk gettext intltool
   gperf re2c
 
 git clone --depth 1 https://github.com/coolsnowwolf/lede openwrt
-(cd openwrt && make prereq)
+# Verify host tools without opening menuconfig ("make prereq" needs a .config):
+(cd openwrt && mkdir -p tmp && \
+  make -r -s -j1 -f include/prereq-build.mk TOPDIR="$PWD" prereq)
 ./scripts/patch-default-settings.sh openwrt
 mkdir -p openwrt/files
 cp -a files/. openwrt/files/
